@@ -89,7 +89,11 @@ std::optional<uint32_t> peekH265PicParameterSetId(const uint8_t* rbsp, std::size
     }
 }
 
-NaluRow buildRow(const NaluInfo& info, const uint8_t* fileData) {
+NaluRow buildRow(const NaluInfo& info, const uint8_t* fileData,
+                  const std::unordered_map<uint32_t, H264Sps>& h264SpsById,
+                  const std::unordered_map<uint32_t, H264Pps>& h264PpsById,
+                  const std::unordered_map<uint32_t, H265Sps>& h265SpsById,
+                  const std::unordered_map<uint32_t, H265Pps>& h265PpsById) {
     NaluRow row;
     row.info = info;
     row.typeName = QString::fromUtf8(naluTypeName(info.codec, info.naluType));
@@ -163,6 +167,38 @@ NaluRow buildRow(const NaluInfo& info, const uint8_t* fileData) {
         } else {
             row.extraInfo = QStringLiteral("Slice");
         }
+
+        // Reuses the same unescaped `rbsp` computed above (slice payloads
+        // are often the bulk of the file's bytes — unescaping it a second
+        // time here would double that cost across the whole stream) to look
+        // up the slice's active SPS/PPS (by ID) and parse the full
+        // slice_header() breakdown.
+        if (info.codec == Codec::H264) {
+            if (const auto ppsId = peekH264PicParameterSetId(rbsp.data(), rbsp.size())) {
+                const auto ppsIt = h264PpsById.find(*ppsId);
+                if (ppsIt != h264PpsById.end()) {
+                    const auto spsIt = h264SpsById.find(ppsIt->second.seqParameterSetId);
+                    if (spsIt != h264SpsById.end()) {
+                        row.h264SliceDetail = parseH264SliceHeaderDetail(
+                            rbsp.data(), rbsp.size(), info.naluType, row.h264NalRefIdc,
+                            spsIt->second, ppsIt->second);
+                    }
+                }
+            }
+        } else if (info.codec == Codec::H265) {
+            if (const auto ppsId =
+                    peekH265PicParameterSetId(rbsp.data(), rbsp.size(), info.naluType)) {
+                const auto ppsIt = h265PpsById.find(*ppsId);
+                if (ppsIt != h265PpsById.end()) {
+                    const auto spsIt = h265SpsById.find(ppsIt->second.seqParameterSetId);
+                    if (spsIt != h265SpsById.end()) {
+                        row.h265SliceDetail = parseH265SliceHeaderDetail(
+                            rbsp.data(), rbsp.size(), info.naluType, spsIt->second,
+                            ppsIt->second);
+                    }
+                }
+            }
+        }
     }
 
     return row;
@@ -192,7 +228,7 @@ void NaluListModel::load(const uint8_t* data, std::size_t size) {
     std::unordered_map<uint32_t, H265Pps> h265PpsById;
 
     for (const auto& info : nalus) {
-        NaluRow row = buildRow(info, data);
+        NaluRow row = buildRow(info, data, h264SpsById, h264PpsById, h265SpsById, h265PpsById);
 
         if (row.h264Sps) h264SpsById[row.h264Sps->seqParameterSetId] = *row.h264Sps;
         if (row.h264Pps) h264PpsById[row.h264Pps->picParameterSetId] = *row.h264Pps;
@@ -202,35 +238,6 @@ void NaluListModel::load(const uint8_t* data, std::size_t size) {
         if (info.isSlice()) {
             gopFrameIndex = info.isKeyframe() ? 0 : gopFrameIndex + 1;
             row.extraInfo += QStringLiteral(" #%1").arg(gopFrameIndex);
-
-            if (info.codec == Codec::H264 && info.length > 1) {
-                const auto rbsp = unescapeRbsp(data + info.offset + 1, info.length - 1);
-                if (const auto ppsId = peekH264PicParameterSetId(rbsp.data(), rbsp.size())) {
-                    const auto ppsIt = h264PpsById.find(*ppsId);
-                    if (ppsIt != h264PpsById.end()) {
-                        const auto spsIt = h264SpsById.find(ppsIt->second.seqParameterSetId);
-                        if (spsIt != h264SpsById.end()) {
-                            row.h264SliceDetail = parseH264SliceHeaderDetail(
-                                rbsp.data(), rbsp.size(), info.naluType, row.h264NalRefIdc,
-                                spsIt->second, ppsIt->second);
-                        }
-                    }
-                }
-            } else if (info.codec == Codec::H265 && info.length > 2) {
-                const auto rbsp = unescapeRbsp(data + info.offset + 2, info.length - 2);
-                if (const auto ppsId =
-                        peekH265PicParameterSetId(rbsp.data(), rbsp.size(), info.naluType)) {
-                    const auto ppsIt = h265PpsById.find(*ppsId);
-                    if (ppsIt != h265PpsById.end()) {
-                        const auto spsIt = h265SpsById.find(ppsIt->second.seqParameterSetId);
-                        if (spsIt != h265SpsById.end()) {
-                            row.h265SliceDetail = parseH265SliceHeaderDetail(
-                                rbsp.data(), rbsp.size(), info.naluType, spsIt->second,
-                                ppsIt->second);
-                        }
-                    }
-                }
-            }
         }
         rows_.push_back(std::move(row));
     }

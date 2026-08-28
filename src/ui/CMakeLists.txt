@@ -6,7 +6,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-add_executable(bitxray_ui
+set(BITXRAY_UI_SOURCES
     main.cpp
     MainWindow.h
     MainWindow.cpp
@@ -27,12 +27,33 @@ add_executable(bitxray_ui
     resources.qrc
 )
 
+# MACOSX_BUNDLE below is a no-op on non-Apple platforms (still produces a
+# plain executable there) — only Apple needs the icon wired into the bundle's
+# Resources/ via MACOSX_PACKAGE_LOCATION.
+if(APPLE)
+    set(BITXRAY_ICNS "${CMAKE_CURRENT_SOURCE_DIR}/resources/BitXRay.icns")
+    set_source_files_properties(${BITXRAY_ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    list(APPEND BITXRAY_UI_SOURCES ${BITXRAY_ICNS})
+endif()
+
+add_executable(bitxray_ui MACOSX_BUNDLE ${BITXRAY_UI_SOURCES})
+
 target_link_libraries(bitxray_ui PRIVATE
     Qt6::Widgets
     Qt6::Svg
     core_parser
     core_player
 )
+
+if(APPLE)
+    set_target_properties(bitxray_ui PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_NAME "BitXRay"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "dev.davidredvest.bitxray"
+        MACOSX_BUNDLE_ICON_FILE "BitXRay.icns"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    )
+endif()
 
 get_property(_bitxray_ffmpeg_lib_dir GLOBAL PROPERTY BITXRAY_FFMPEG_LIB_DIR)
 if(_bitxray_ffmpeg_lib_dir)

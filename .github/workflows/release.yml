@@ -1,0 +1,179 @@
+name: Release
+
+# Builds BitXRay for macOS, Linux, and Windows and attaches the packaged
+# binaries to the GitHub Release for the pushed tag. Each platform builds
+# Qt6 + FFmpeg from scratch on the runner (there's no cross-compiling here —
+# this repo's own maintainer only has macOS available locally, see
+# CHANGELOG.md), so this workflow is the only way v* tags get non-macOS
+# builds at all.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: "6.8.1"
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: "qtsvg"
+
+      - name: Install FFmpeg
+        run: brew install ffmpeg
+
+      - name: Configure
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}" \
+            -DFFMPEG_ROOT="$(brew --prefix ffmpeg)"
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package .app bundle
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp -R build/src/ui/bitxray_ui.app dist/BitXRay.app
+          "${QT_ROOT_DIR}/bin/macdeployqt" dist/BitXRay.app
+          chmod -R u+w dist/BitXRay.app
+          bash packaging/macos/bundle_ffmpeg.sh dist/BitXRay.app
+          # Ad-hoc signature: unnotarized, so Gatekeeper still flags it on
+          # first launch (documented in README.md's Downloads section) —
+          # but it's enough to satisfy the signing check the app needs to
+          # actually run at all, without an Apple Developer account.
+          codesign --force --deep --sign - dist/BitXRay.app
+          codesign --verify --deep --strict dist/BitXRay.app
+          cd dist && ditto -c -k --sequesterRsrc --keepParent BitXRay.app BitXRay-macos.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BitXRay-macos
+          path: dist/BitXRay-macos.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: "qtsvg"
+
+      - name: Install FFmpeg dev libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libavcodec-dev libavutil-dev libswscale-dev libswresample-dev
+
+      - name: Configure
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}"
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package portable directory
+        run: |
+          set -euo pipefail
+          mkdir -p dist/BitXRay/bin dist/BitXRay/lib
+          cp build/src/ui/bitxray_ui dist/BitXRay/bin/
+          bash packaging/linux/bundle_libs.sh dist/BitXRay/bin/bitxray_ui dist/BitXRay/lib
+          cp packaging/linux/bitxray_ui.sh dist/BitXRay/bitxray_ui.sh
+          chmod +x dist/BitXRay/bitxray_ui.sh
+          # Qt needs its platform plugin to find a windowing backend; without
+          # it the bundle only works on the exact build host.
+          mkdir -p dist/BitXRay/plugins/platforms
+          cp "${QT_ROOT_DIR}/plugins/platforms/libqxcb.so" dist/BitXRay/plugins/platforms/
+          bash packaging/linux/bundle_libs.sh dist/BitXRay/plugins/platforms/libqxcb.so dist/BitXRay/lib
+          tar -C dist -czf dist/BitXRay-linux-x86_64.tar.gz BitXRay
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BitXRay-linux
+          path: dist/BitXRay-linux-x86_64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: "qtsvg"
+
+      - name: Download FFmpeg (shared, dev)
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "ffmpeg-n*-latest-win64-gpl-shared-*.zip" } | Select-Object -First 1
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath C:\ffmpeg-extracted
+          $inner = Get-ChildItem C:\ffmpeg-extracted | Select-Object -First 1
+          Move-Item $inner.FullName C:\ffmpeg
+
+      - name: Configure
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
+            -DFFMPEG_ROOT="C:\ffmpeg"
+
+      - name: Build
+        run: cmake --build build --config Release -j 4
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\BitXRay | Out-Null
+          $exe = Get-ChildItem -Recurse build\src\ui -Filter bitxray_ui.exe | Select-Object -First 1
+          Copy-Item $exe.FullName dist\BitXRay\
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" dist\BitXRay\bitxray_ui.exe
+          Copy-Item C:\ffmpeg\bin\*.dll dist\BitXRay\
+          Compress-Archive -Path dist\BitXRay\* -DestinationPath dist\BitXRay-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BitXRay-windows
+          path: dist/BitXRay-windows-x86_64.zip
+
+  publish:
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/BitXRay-macos/BitXRay-macos.zip
+            artifacts/BitXRay-linux/BitXRay-linux-x86_64.tar.gz
+            artifacts/BitXRay-windows/BitXRay-windows-x86_64.zip
+          generate_release_notes: true

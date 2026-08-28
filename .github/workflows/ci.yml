@@ -1,0 +1,34 @@
+name: CI
+
+# Fast unit-test signal on every push/PR — separate from release.yml (which
+# only runs on version tags and does the full 3-platform packaging build).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.1"
+          modules: "qtsvg"
+
+      - name: Install FFmpeg dev libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libavcodec-dev libavutil-dev libswscale-dev libswresample-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}"
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

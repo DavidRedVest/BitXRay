@@ -54,10 +54,9 @@ uint8_t h265NaluType(uint8_t headerByte0) {
     return (headerByte0 >> 1) & 0x3F;
 }
 
-} // namespace
-
-Codec detectCodec(const uint8_t* data, std::size_t size) {
-    const std::vector<RawNalu> raw = scanStartCodes(data, size);
+// Shared by detectCodec() and extractNalus() so a codec-unspecified load
+// only pays for one scanStartCodes() pass over the whole file, not two.
+Codec detectCodecFromRaw(const uint8_t* data, const std::vector<RawNalu>& raw) {
     for (const RawNalu& nalu : raw) {
         if (nalu.length == 0) {
             continue;
@@ -84,9 +83,17 @@ Codec detectCodec(const uint8_t* data, std::size_t size) {
     return Codec::Unknown;
 }
 
+} // namespace
+
+Codec detectCodec(const uint8_t* data, std::size_t size) {
+    return detectCodecFromRaw(data, scanStartCodes(data, size));
+}
+
 std::vector<NaluInfo> extractNalus(const uint8_t* data, std::size_t size, Codec codec) {
+    const std::vector<RawNalu> raw = scanStartCodes(data, size);
+
     if (codec == Codec::Unknown) {
-        codec = detectCodec(data, size);
+        codec = detectCodecFromRaw(data, raw);
     }
     // Default to H.264 if detection still fails (e.g. a stream with only
     // slice NALUs and no parameter sets in view) rather than leaving every
@@ -95,7 +102,6 @@ std::vector<NaluInfo> extractNalus(const uint8_t* data, std::size_t size, Codec 
         codec = Codec::H264;
     }
 
-    const std::vector<RawNalu> raw = scanStartCodes(data, size);
     std::vector<NaluInfo> result;
     result.reserve(raw.size());
 
