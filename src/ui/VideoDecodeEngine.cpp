@@ -41,6 +41,14 @@ VideoDecodeEngine::VideoDecodeEngine(QObject* parent)
     // and this is close enough for both the analysis panel and the
     // standalone player.
     playbackTimer_->setInterval(40);
+    // Qt's default (Qt::CoarseTimer) is allowed to fire up to ~5% late and is
+    // coalesced with other timers to save power — on Windows in particular
+    // this can silently stretch a nominal 40ms tick well past 40ms without
+    // an app-wide high-resolution timer request, making playback visibly
+    // slower than on platforms with tighter default timer granularity (e.g.
+    // macOS) for the exact same interval. PreciseTimer asks the OS for
+    // millisecond accuracy on every platform.
+    playbackTimer_->setTimerType(Qt::PreciseTimer);
     connect(playbackTimer_, &QTimer::timeout, this, &VideoDecodeEngine::onTimerTick);
 }
 

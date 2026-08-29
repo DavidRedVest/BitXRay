@@ -3,6 +3,44 @@
 All notable changes to BitXRay are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.1] - 2026-08-29
+
+Windows-specific fixes reported against the v0.1.0 release binaries (this
+project's only Windows/Linux testing so far has been via CI, not a real
+Windows machine, so these went unnoticed until a user compared the packaged
+builds directly).
+
+### Fixed
+
+- Playback running visibly slower on Windows than macOS for the same H.265
+  clip (compared directly against H264BSAnalyzer on Windows): the playback
+  `QTimer` used its default `Qt::CoarseTimer` type, which the OS is allowed
+  to fire up to ~5% late and coalesce with other timers to save power. On
+  Windows this can silently stretch the nominal 40 ms (~25 fps) tick well
+  past its requested interval without an app-wide high-resolution timer
+  request, in a way macOS's default timer granularity doesn't exhibit
+  nearly as much. Switched to `Qt::PreciseTimer`.
+- A console window popping up behind the GUI on Windows launch: the
+  executable was linked with the default console subsystem (no `WIN32`
+  keyword on `add_executable`), which is a no-op on macOS/Linux but matters
+  on Windows.
+- An extra "File" dropdown appearing in the window on Windows, duplicating
+  the Open/Play/About toolbar buttons: a `QMenuBar` menu with the same three
+  actions was still being created alongside the toolbar. On macOS this
+  merges invisibly into the system-wide menu bar, so it went unnoticed
+  there, but on Windows/Linux a `QMenuBar` renders as a literal extra row
+  inside the window. Removed — Open/Play/About now live only on the toolbar.
+- Reopening a file appearing to hang on Windows: `loadFile()`'s parsing and
+  the video engine's up-front decode-order-learning pass are both
+  synchronous, and gave no visual feedback while running (unnoticeable
+  enough on the faster/tested platform to go uncaught). Added a wait-cursor
+  during the load so the app now visibly signals it's working instead of
+  looking frozen; the underlying work itself is still synchronous, so a
+  slower decode throughput on a given machine/FFmpeg build will still take
+  proportionally longer — see the note in `VideoDecodeEngine.h` about that
+  being an intentional trade-off (a fully async load is future work if this
+  turns out not to be enough).
+
 ## [0.1.0] - 2026-08-29
 
 Initial public release. Built iteratively (see below) against three real

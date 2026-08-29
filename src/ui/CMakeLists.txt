@@ -36,7 +36,10 @@ if(APPLE)
     list(APPEND BITXRAY_UI_SOURCES ${BITXRAY_ICNS})
 endif()
 
-add_executable(bitxray_ui MACOSX_BUNDLE ${BITXRAY_UI_SOURCES})
+# WIN32 selects the GUI subsystem on Windows (no-op elsewhere) — without it,
+# the linker defaults to the console subsystem and every launch pops up a
+# console window behind the actual Qt UI.
+add_executable(bitxray_ui WIN32 MACOSX_BUNDLE ${BITXRAY_UI_SOURCES})
 
 target_link_libraries(bitxray_ui PRIVATE
     Qt6::Widgets

@@ -5,8 +5,8 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QHeaderView>
-#include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QSplitter>
@@ -86,11 +86,11 @@ MainWindow::MainWindow(QWidget* parent)
     aboutAction->setMenuRole(QAction::NoRole);
     connect(aboutAction, &QAction::triggered, this, &MainWindow::showAboutDialog);
 
-    auto* fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
-    fileMenu->addAction(openAction);
-    fileMenu->addAction(playAction_);
-    fileMenu->addAction(aboutAction);
-
+    // Deliberately no QMenuBar menu here: Open/Play/About live only on the
+    // toolbar below. On macOS a menu bar is easy to overlook (it just merges
+    // into the system-wide menu bar), but on Windows/Linux it renders as a
+    // literal extra "File" dropdown row duplicating the toolbar buttons —
+    // exactly the menu clutter this toolbar-only layout was chosen to avoid.
     QToolBar* toolBar = addToolBar(QStringLiteral("Main"));
     toolBar->setMovable(false);
     toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
@@ -153,6 +153,15 @@ void MainWindow::loadFile(const QString& path) {
     }
     fileData_ = file.readAll();
 
+    // Parsing + the video engine's up-front decode-order-learning pass (see
+    // VideoDecodeEngine::loadStream) are both synchronous and can take a
+    // noticeable moment on a large file — an override cursor is cheap
+    // insurance against that reading as a hang rather than a load in
+    // progress. processEvents() forces the cursor change to actually paint
+    // before the blocking work below starts.
+    QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+    QGuiApplication::processEvents();
+
     naluListModel_->load(reinterpret_cast<const uint8_t*>(fileData_.constData()),
                           static_cast<std::size_t>(fileData_.size()));
     hexView_->setFileData(reinterpret_cast<const uint8_t*>(fileData_.constData()),
@@ -161,6 +170,8 @@ void MainWindow::loadFile(const QString& path) {
     syntaxTree_->showMessage(QStringLiteral("Select an SPS/PPS row to view its syntax elements."));
     videoPreview_->loadStream(naluListModel_->naluInfos(), fileData_);
     playAction_->setEnabled(videoPreview_->frameCount() > 0);
+
+    QGuiApplication::restoreOverrideCursor();
 
     statusBar()->showMessage(
         QStringLiteral("Loaded %1 (%2 bytes, %3 NALUs)")
@@ -228,7 +239,7 @@ void MainWindow::showAboutDialog() {
         this, QStringLiteral("About BitXRay"),
         QStringLiteral(
             "<h3>BitXRay</h3>"
-            "<p>Version 0.1.0 (built %1)</p>"
+            "<p>Version 0.1.1 (built %1)</p>"
             "<p>An H.264/H.265 elementary-stream analyzer and visualizer — NALU/hex/syntax-tree "
             "inspection kept in sync with frame-accurate video playback.</p>"
             "<p>Author: Lichance</p>")
